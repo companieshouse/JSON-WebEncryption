@@ -1,6 +1,8 @@
 Revision history for JSON-WebEncryption
 
 {{$NEXT}}
+
+0.02  2014-03-01
   - Fix params passed to encode
 
 0.01  2014-03-01

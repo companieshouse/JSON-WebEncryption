@@ -1,6 +1,7 @@
 Revision history for JSON-WebEncryption
 
 {{$NEXT}}
+  - Fix params passed to encode
 
 0.01  2014-03-01
   - First release

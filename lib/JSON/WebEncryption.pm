@@ -46,7 +46,7 @@ sub decode_to_hash {
 
 sub encode
 {
-    my ($self, $ciphertext, $enc, $key, $extra_headers, $alg ) = @_;
+    my ($self, $plaintext, $enc, $key, $extra_headers, $alg ) = @_;
 
     $alg //= 'RSA1_5';
 

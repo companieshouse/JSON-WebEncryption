@@ -168,3 +168,15 @@ sub _getCipher
 
 # -----------------------------------------------------------------------------
 1;
+
+__END__
+
+=head1 NAME
+
+JSON::WebEncryption - Perl JSON Web Encryption (JWE) implementation
+
+=head1 DESCRIPTION
+
+
+
+=cut

@@ -87,7 +87,6 @@ sub encode
 
     my $icheck = encode_base64url( &$integrity_fn( $to_be_signed ) );
 
-   croak $to_be_signed.".$icheck"; 
    return $to_be_signed.".$icheck"; 
 }
 

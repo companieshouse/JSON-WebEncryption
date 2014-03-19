@@ -33,25 +33,44 @@ our %crypt_padding_map = (
 
 # -----------------------------------------------------------------------------
 
-sub encode_from_hash {
-    my ($hash) = @_;
+sub new {
+    my($caller, %arg) = @_;
 
-    return encode(encode_json($hash));
+    my $self =  bless {}, $caller;
+
+    $self->{alg}         = $arg{alg};
+    $self->{enc}         = $arg{enc};
+    $self->{key}         = $arg{key};
+    $self->{private_key} = $arg{private_key};
+    $self->{public_key}  = $arg{public_key};
+
+    return $self;
+}
+
+# -----------------------------------------------------------------------------
+
+sub encode_from_hash {
+    my ($self, $hash) = @_;
+
+    return $self->encode(encode_json($hash));
 }
 
 # -----------------------------------------------------------------------------
 
 sub decode_to_hash {
-    my ($jwe) = @_;
+    my ($self, $jwe) = @_;
 
-    return decode_json(decode($jwe));
+    return decode_json($self->decode($jwe));
 }
 
 # -----------------------------------------------------------------------------
 
 sub encode
 {
-    my ($plaintext, $enc, $key, $alg, $extra_headers ) = @_;
+    my ($self, $plaintext, $enc, $key, $alg, $extra_headers ) = @_;
+
+    $alg //= $self->{alg};
+    $enc //= $self->{enc};
 
     my $alg_params = $allowed_alg{$alg};
     my $enc_params = $allowed_enc{$enc};
@@ -66,7 +85,7 @@ sub encode
 
     my $encoder = $alg_params->[0];
 
-    my ($ciphertext, $encrypted_key) = &$encoder( $enc_params, $key, $iv, $plaintext );
+    my ($ciphertext, $encrypted_key) = &$encoder( $self, $enc_params, $key, $iv, $plaintext );
 
     $extra_headers //= {};
 
@@ -95,15 +114,14 @@ sub encode
 sub encode_jwe
 {
     local $Carp::CarpLevel = $Carp::CarpLevel + 1;
-    encode(@_);
-    #__PACKAGE__->encode(@_);
+    __PACKAGE__->encode(@_);
 }
 
 # -----------------------------------------------------------------------------
 
 sub decode
 {
-    my ($jwe, $key) = @_;
+    my ($self, $jwe, $key) = @_;
 
     my @segment = split( /\./, $jwe );
 
@@ -135,7 +153,7 @@ sub decode
 
     my $decoder = $alg_params->[1];
 
-    my $plaintext = &$decoder( $enc_params, $key, $iv, $ciphertext, $encrypted_key );
+    my $plaintext = &$decoder( $self, $enc_params, $key, $iv, $ciphertext, $encrypted_key );
 
     return $plaintext;
 }
@@ -145,8 +163,7 @@ sub decode
 sub decode_jwe
 {
     local $Carp::CarpLevel = $Carp::CarpLevel + 1;
-    decode(@_);
-    #__PACKAGE__->decode(@_);
+    __PACKAGE__->decode(@_);
 }
 
 # -----------------------------------------------------------------------------
@@ -170,7 +187,9 @@ sub _getCipher
 
 sub _alg_dir_encode
 {
-    my ( $enc_params, $key, $iv, $plaintext ) = @_;
+    my ( $self, $enc_params, $key, $iv, $plaintext ) = @_;
+
+    $key //= $self->{key};
 
     my $cipherType = $enc_params->[0];
     my $keysize    = $enc_params->[1] / 8; # /8 to get it in bytes
@@ -187,7 +206,9 @@ sub _alg_dir_encode
 
 sub _alg_dir_decode
 {
-    my ( $enc_params, $key, $iv, $ciphertext  ) = @_;
+    my ( $self, $enc_params, $key, $iv, $ciphertext  ) = @_;
+
+    $key //= $self->{key};
 
     my $cipherType = $enc_params->[0];
     my $keysize    = $enc_params->[1] / 8; # /8 to get it in bytes
@@ -201,7 +222,9 @@ sub _alg_dir_decode
 
 sub _alg_RSA1_5_encode
 {
-    my ( $enc_params, $public_key, $iv, $plaintext ) = @_;
+    my ( $self, $enc_params, $public_key, $iv, $plaintext ) = @_;
+
+    $public_key //= $self->{public_key};
 
     my $cipherType = $enc_params->[0];
     my $keysize    = $enc_params->[1] / 8; # /8 to get it in bytes
@@ -224,7 +247,9 @@ sub _alg_RSA1_5_encode
 
 sub _alg_RSA1_5_decode
 {
-    my ( $enc_params, $private_key, $iv, $ciphertext, $encrypted_key  ) = @_;
+    my ( $self, $enc_params, $private_key, $iv, $ciphertext, $encrypted_key  ) = @_;
+
+    $private_key //= $self->{private_key};
 
     my $cipherType = $enc_params->[0];
     my $keysize    = $enc_params->[1] / 8; # /8 to get it in bytes

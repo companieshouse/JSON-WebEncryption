@@ -4,27 +4,48 @@ use strict;
 
 use parent 'Exporter';
 
+our $VERSION = '0.01';
+
 use Carp qw(croak);
 use Crypt::CBC;
+use Crypt::OpenSSL::RSA;
 use JSON qw(decode_json encode_json);
 use Digest::SHA qw(hmac_sha256 hmac_sha512);
 use MIME::Base64 qw(encode_base64url decode_base64url);
 
 our @EXPORT = qw( encode_jwe decode_jwe );
 
-our %allowed_enc = (
-#                   Type     keysize ivsize    pading  integrity func
-"A128CBC+HS256" => ['Rijndael', '128', '128', 'PKCS#5', \&hmac_sha256], # AES 128 in CBC with SHA256 HMAC integrity check
-"A256CBC+HS512" => ['Rijndael', '256', '128', 'PKCS#5', \&hmac_sha512], # AES 256 in CBC with SHA512 HMAC integrity check
-"BF128BC+HS256" => ['Blowfish', '128', '64', 'PKCS#5', \&hmac_sha256], # Blowfish 128 in CBC with SHA256 HMAC integrity check
+our %allowed_alg = (
+"dir"    => [ \&_alg_dir_encode,    \&_alg_dir_decode    ],
+"RSA1_5" => [ \&_alg_RSA1_5_encode, \&_alg_RSA1_5_decode ],
 );
 
-my %crypt_padding_map = (
+our %allowed_enc = (
+#                   Type     keysize ivsize    pading  integrity func
+"A128CBC-HS256" => ['Rijndael', '128', '128', 'PKCS#5', \&hmac_sha256], # AES 128 in CBC with SHA256 HMAC integrity check
+"A256CBC-HS512" => ['Rijndael', '256', '128', 'PKCS#5', \&hmac_sha512], # AES 256 in CBC with SHA512 HMAC integrity check
+"BF128BC-HS256" => ['Blowfish', '128',  '64', 'PKCS#5', \&hmac_sha256], # Blowfish 128 in CBC with SHA256 HMAC integrity check
+);
+
+our %crypt_padding_map = (
     'PKCS#5' => 'standard'
 );
 
-sub __allowed_enc      { \%allowed_enc };
-sub __crypt_padding_map{ \%crypt_padding_map };
+# -----------------------------------------------------------------------------
+
+sub new {
+    my($caller, %arg) = @_;
+
+    my $self =  bless {}, $caller;
+
+    $self->{alg}         = $arg{alg};
+    $self->{enc}         = $arg{enc};
+    $self->{key}         = $arg{key};
+    $self->{private_key} = $arg{private_key};
+    $self->{public_key}  = $arg{public_key};
+
+    return $self;
+}
 
 # -----------------------------------------------------------------------------
 
@@ -46,41 +67,38 @@ sub decode_to_hash {
 
 sub encode
 {
-    my ($self, $plaintext, $enc, $key, $extra_headers, $alg ) = @_;
+    my ($self, $plaintext, $enc, $key, $alg, $extra_headers ) = @_;
 
-    $alg //= 'RSA1_5';
+    $alg //= $self->{alg};
+    $enc //= $self->{enc};
 
-    # At the moment, only direct encryption with an agreed shared key is allowed
-    croak "Unsupported alg value. Possible values are 'dir'."  unless $self->alg eq 'dir';
+    my $alg_params = $allowed_alg{$alg};
+    my $enc_params = $allowed_enc{$enc};
 
-    my $enc_params = __allowed_enc->{$self->enc};
+    croak "Unsupported alg value $alg. Possible values are ".join( ', ', (keys %allowed_alg) ) unless $alg_params;
+    croak "Unsupported enc value $enc. Possible values are ".join( ', ', (keys %allowed_enc) ) unless $enc_params;
 
-    croak "Unsupported enc value. Possible values are ".join( ', ', (keys &__allowed_enc) ) unless $enc_params;
-
-    my $cipherType   = $enc_params->[0];
-    my $keysize      = $enc_params->[1] / 8; # /8 to get it in bytes
     my $ivsize       = $enc_params->[2] / 8; # /8 to get it in bytes
-    my $padding      = __crypt_padding_map->{ $enc_params->[3] };
     my $integrity_fn = $enc_params->[4];
 
-    # Create initialisation vector
-    # 
     my $iv = Crypt::CBC->random_bytes($ivsize);
-    my $cipher = $self->_getCipher( $cipherType, $key, $padding, $iv, $keysize );
-    my $ciphertext = $cipher->encrypt( $plaintext );
+
+    my $encoder = $alg_params->[0];
+
+    my ($ciphertext, $encrypted_key) = &$encoder( $self, $enc_params, $key, $iv, $plaintext );
+
+    $extra_headers //= {};
 
     my $header = {
         typ => 'JWE',
-        alg => $self->alg,
-        enc => $self->enc,
+        alg => $alg,
+        enc => $enc,
         %$extra_headers,
     };
 
-    my $jwe_encryptedKey = ''; # Empty for 'dir' algorithm
-
     my @segment;
     push @segment, encode_base64url( encode_json($header) );
-    push @segment, encode_base64url( $jwe_encryptedKey );
+    push @segment, encode_base64url( $encrypted_key );
     push @segment, encode_base64url( $iv );
     push @segment, encode_base64url( $ciphertext );
 
@@ -88,7 +106,7 @@ sub encode
 
     my $icheck = encode_base64url( &$integrity_fn( $to_be_signed ) );
 
-   return $to_be_signed.".$icheck"; 
+   return $to_be_signed.".$icheck";
 }
 
 # -----------------------------------------------------------------------------
@@ -113,22 +131,19 @@ sub decode
 
     croak "Cannot decode a non JWE message."  if $header->{typ} ne 'JWE';
 
-    croak "Unsupported alg value. Acceptable values are 'dir'."  if $header->{alg} ne 'dir';
+    my $alg_params = $allowed_alg{$header->{alg}};
+    my $enc_params = $allowed_enc{$header->{enc}};
 
-    my $enc_params = __allowed_enc->{$header->{enc}};
+    croak "Unsupported enc value in JWE. JWE may be decoded with env values of ".join( ', ', (keys %allowed_enc) ) unless $enc_params;
+    croak "Unsupported alg value in JWE. JWE may be decoded with alg values of ".join( ', ', (keys %allowed_alg) ) unless $alg_params;
 
-    croak "Unsupported enc value in JWE. JWE may be decoded with env values of ".join( ', ', (keys &__allowed_enc) ) unless $enc_params;
-    my $jwe_encryptedKey = decode_base64url( $segment[1] );
-    my $iv               = decode_base64url( $segment[2] );
-    my $ciphertext       = decode_base64url( $segment[3] );
-    my $icheckB64        = $segment[4];
+    my $encrypted_key = decode_base64url( $segment[1] );
+    my $iv            = decode_base64url( $segment[2] );
+    my $ciphertext    = decode_base64url( $segment[3] );
+    my $icheckB64     = $segment[4];
 
-    my $cipherType   = $enc_params->[0];
-    my $keysize      = $enc_params->[1] / 8; # /8 to get it in bytes
-    my $ivsize       = $enc_params->[2] / 8; # /8 to get it in bytes
-    my $padding      = __crypt_padding_map->{ $enc_params->[3] };
     my $integrity_fn = $enc_params->[4];
-    
+
     my $signed_section = substr( $jwe, 0, rindex($jwe, '.') );
 
     if( $icheckB64 ne encode_base64url( &$integrity_fn($signed_section) ) )
@@ -136,8 +151,9 @@ sub decode
         croak "Cannot decode JWE." ;
     }
 
-    my $cipher = $self->_getCipher( $cipherType, $key, $padding, $iv, $keysize );
-    my $plaintext = $cipher->decrypt( $ciphertext );
+    my $decoder = $alg_params->[1];
+
+    my $plaintext = &$decoder( $self, $enc_params, $key, $iv, $ciphertext, $encrypted_key );
 
     return $plaintext;
 }
@@ -154,7 +170,7 @@ sub decode_jwe
 
 sub _getCipher
 {
-    my ($self, $cipherType, $symetric_key, $padding, $iv, $keysize) = @_;
+    my ($cipherType, $symetric_key, $padding, $iv, $keysize) = @_;
     my $cipher = Crypt::CBC->new( -literal_key => 1,
                                   -key         => $symetric_key,
                                   -keysize     => $keysize,
@@ -164,6 +180,90 @@ sub _getCipher
                                   -padding     => $padding,
                                   -cipher      => $cipherType
                                 );
+}
+
+
+# -----------------------------------------------------------------------------
+
+sub _alg_dir_encode
+{
+    my ( $self, $enc_params, $key, $iv, $plaintext ) = @_;
+
+    $key //= $self->{key};
+
+    my $cipherType = $enc_params->[0];
+    my $keysize    = $enc_params->[1] / 8; # /8 to get it in bytes
+    my $padding    = $crypt_padding_map{ $enc_params->[3] };
+
+    my $cipher     = _getCipher( $cipherType, $key, $padding, $iv, $keysize );
+    my $ciphertext = $cipher->encrypt( $plaintext );
+    my $encrypted_key = '';
+
+    return ($ciphertext, $encrypted_key);
+}
+
+# -----------------------------------------------------------------------------
+
+sub _alg_dir_decode
+{
+    my ( $self, $enc_params, $key, $iv, $ciphertext  ) = @_;
+
+    $key //= $self->{key};
+
+    my $cipherType = $enc_params->[0];
+    my $keysize    = $enc_params->[1] / 8; # /8 to get it in bytes
+    my $padding    = $crypt_padding_map{ $enc_params->[3] };
+
+    my $cipher = _getCipher( $cipherType, $key, $padding, $iv, $keysize );
+    return $cipher->decrypt( $ciphertext );
+}
+
+# -----------------------------------------------------------------------------
+
+sub _alg_RSA1_5_encode
+{
+    my ( $self, $enc_params, $public_key, $iv, $plaintext ) = @_;
+
+    $public_key //= $self->{public_key};
+
+    my $cipherType = $enc_params->[0];
+    my $keysize    = $enc_params->[1] / 8; # /8 to get it in bytes
+    my $padding    = $crypt_padding_map{ $enc_params->[3] };
+
+    # Purely alg = RSA1_5
+    my $rsa = Crypt::OpenSSL::RSA->new_public_key( $public_key ); # Key passed in is a Public Key
+    $rsa->use_pkcs1_oaep_padding;
+
+    my $CEK           = Crypt::CBC->random_bytes( $keysize );
+    my $encrypted_key = $rsa->encrypt( $CEK );
+
+    my $cipher     = _getCipher( $cipherType, $CEK, $padding, $iv, $keysize );
+    my $ciphertext = $cipher->encrypt( $plaintext );
+
+    return ($ciphertext, $encrypted_key);
+}
+
+# -----------------------------------------------------------------------------
+
+sub _alg_RSA1_5_decode
+{
+    my ( $self, $enc_params, $private_key, $iv, $ciphertext, $encrypted_key  ) = @_;
+
+    $private_key //= $self->{private_key};
+
+    my $cipherType = $enc_params->[0];
+    my $keysize    = $enc_params->[1] / 8; # /8 to get it in bytes
+    my $padding    = $crypt_padding_map{ $enc_params->[3] };
+
+    # Decrypt the encryption key using the Private Key
+    my $rsa = Crypt::OpenSSL::RSA->new_private_key( $private_key ); # Key passed in is a Private Key
+    $rsa->use_pkcs1_oaep_padding;
+    my $CEK = $rsa->decrypt( $encrypted_key );
+
+    # Use the encryption key to decrypt the message
+    my $cipher = _getCipher( $cipherType, $CEK, $padding, $iv, $keysize );
+
+    return  $cipher->decrypt( $ciphertext );
 }
 
 # -----------------------------------------------------------------------------

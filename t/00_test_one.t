@@ -2,6 +2,8 @@ use strict;
 use warnings;
 use t::Util;
 
+use Crypt::Rijndael;
+
 use Test::More;
 use Test::Requires 'Crypt::OpenSSL::RSA';
 

@@ -1,6 +1,8 @@
 Revision history for JSON-WebEncryption
 
 {{$NEXT}}
+
+0.05  2014-08-05
   - Added cpanfile to track dependencies
 
 0.04  2014-07-07

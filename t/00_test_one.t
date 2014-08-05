@@ -4,7 +4,7 @@ use t::Util;
 
 use Crypt::Rijndael;
 
-use Test::More;
+use Test::More tests => 4;
 use Test::Requires 'Crypt::OpenSSL::RSA';
 
 my $secret      = Crypt::CBC->random_bytes( 16 );

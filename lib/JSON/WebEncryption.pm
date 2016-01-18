@@ -69,8 +69,8 @@ sub encode
 {
     my ($self, $plaintext, $enc, $key, $alg, $extra_headers ) = @_;
 
-    $alg //= $self->{alg};
-    $enc //= $self->{enc};
+    $alg = $self->{alg} unless defined $alg;
+    $enc = $self->{enc} unless defined $enc;
 
     my $alg_params = $allowed_alg{$alg};
     my $enc_params = $allowed_enc{$enc};
@@ -87,7 +87,7 @@ sub encode
 
     my ($ciphertext, $encrypted_key) = &$encoder( $self, $enc_params, $key, $iv, $plaintext );
 
-    $extra_headers //= {};
+    $extra_headers = {} unless defined $extra_headers;
 
     my $header = {
         typ => 'JWE',
@@ -189,7 +189,7 @@ sub _alg_dir_encode
 {
     my ( $self, $enc_params, $key, $iv, $plaintext ) = @_;
 
-    $key //= $self->{key};
+    $key = $self->{key} unless defined $key;
 
     my $cipherType = $enc_params->[0];
     my $keysize    = $enc_params->[1] / 8; # /8 to get it in bytes
@@ -208,7 +208,7 @@ sub _alg_dir_decode
 {
     my ( $self, $enc_params, $key, $iv, $ciphertext  ) = @_;
 
-    $key //= $self->{key};
+    $key = $self->{key} unless defined $key;
 
     my $cipherType = $enc_params->[0];
     my $keysize    = $enc_params->[1] / 8; # /8 to get it in bytes
@@ -224,7 +224,7 @@ sub _alg_RSA1_5_encode
 {
     my ( $self, $enc_params, $public_key, $iv, $plaintext ) = @_;
 
-    $public_key //= $self->{public_key};
+    $public_key = $self->{public_key} unless defined $public_key;
 
     my $cipherType = $enc_params->[0];
     my $keysize    = $enc_params->[1] / 8; # /8 to get it in bytes
@@ -249,7 +249,7 @@ sub _alg_RSA1_5_decode
 {
     my ( $self, $enc_params, $private_key, $iv, $ciphertext, $encrypted_key  ) = @_;
 
-    $private_key //= $self->{private_key};
+    $private_key = $self->{private_key} unless defined $private_key;
 
     my $cipherType = $enc_params->[0];
     my $keysize    = $enc_params->[1] / 8; # /8 to get it in bytes

@@ -1,6 +1,7 @@
 Revision history for JSON-WebEncryption
 
 {{$NEXT}}
+  - Fixed HMAC generation (which doubles the length of the requred key from 16 bytes to 32. This is _correct_ and how other implementations (Java, Golang) work.
 
 0.05  2014-08-05
   - Added cpanfile to track dependencies

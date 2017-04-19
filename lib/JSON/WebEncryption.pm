@@ -71,6 +71,7 @@ sub encode
 
     $alg //= $self->{alg};
     $enc //= $self->{enc};
+    $key //= $self->{key};
 
     my $alg_params = $allowed_alg{$alg};
     my $enc_params = $allowed_enc{$enc};
@@ -78,6 +79,7 @@ sub encode
     croak "Unsupported alg value $alg. Possible values are ".join( ', ', (keys %allowed_alg) ) unless $alg_params;
     croak "Unsupported enc value $enc. Possible values are ".join( ', ', (keys %allowed_enc) ) unless $enc_params;
 
+    my $keysize      = $enc_params->[1];
     my $ivsize       = $enc_params->[2] / 8; # /8 to get it in bytes
     my $integrity_fn = $enc_params->[4];
 
@@ -95,18 +97,19 @@ sub encode
         enc => $enc,
         %$extra_headers,
     };
+    my $b64Header = encode_base64url( encode_json($header));
+    my $jwe_encryptedKey = ''; # Empty for 'dir' algorithm
+
+    my $atagB64 = _getAuthTag($b64Header, $iv, $ciphertext, $key, $enc_params);
 
     my @segment;
-    push @segment, encode_base64url( encode_json($header) );
-    push @segment, encode_base64url( $encrypted_key );
+    push @segment, $b64Header;
+    push @segment, encode_base64url( $jwe_encryptedKey );
     push @segment, encode_base64url( $iv );
     push @segment, encode_base64url( $ciphertext );
+    push @segment, $atagB64;
 
-    my $to_be_signed = join('.', @segment);
-
-    my $icheck = encode_base64url( &$integrity_fn( $to_be_signed ) );
-
-   return $to_be_signed.".$icheck";
+    return join('.', @segment);
 }
 
 # -----------------------------------------------------------------------------
@@ -127,7 +130,8 @@ sub decode
 
     # Decode the header first, to see what we're dealing with
     #
-    my $header = decode_json( decode_base64url( $segment[0] ) );
+    my $b64Header = $segment[0];
+    my $header = decode_json( decode_base64url( $b64Header ) );
 
     croak "Cannot decode a non JWE message."  if $header->{typ} ne 'JWE';
 
@@ -142,20 +146,38 @@ sub decode
     my $ciphertext    = decode_base64url( $segment[3] );
     my $icheckB64     = $segment[4];
 
-    my $integrity_fn = $enc_params->[4];
+    $key //= $self->{key};
 
-    my $signed_section = substr( $jwe, 0, rindex($jwe, '.') );
+    my $atagB64 = _getAuthTag($b64Header, $iv, $ciphertext, $key, $enc_params);
 
-    if( $icheckB64 ne encode_base64url( &$integrity_fn($signed_section) ) )
+    if( $icheckB64 ne $atagB64 )
     {
         croak "Cannot decode JWE." ;
     }
 
     my $decoder = $alg_params->[1];
-
     my $plaintext = &$decoder( $self, $enc_params, $key, $iv, $ciphertext, $encrypted_key );
 
     return $plaintext;
+}
+
+# -----------------------------------------------------------------------------
+
+sub _getAuthTag
+{
+    my ($header, $iv, $ciphertext, $key, $enc_params) = @_;
+
+    my $keysize      = $enc_params->[1];
+    my $integrity_fn = $enc_params->[4];
+
+    my $hmackey = _getMacKey($key,$keysize);
+
+    my $headlength = 8 * length $header;
+    my $al = pack("NN",0,$headlength);  # Big endian 64bit length
+    my $hmacinput = $header . $iv . $ciphertext . $al;
+    my $hmac = &$integrity_fn($hmacinput, $hmackey);
+    my $authtag = substr($hmac,0,$keysize);
+    return encode_base64url( $authtag );
 }
 
 # -----------------------------------------------------------------------------
@@ -168,20 +190,34 @@ sub decode_jwe
 
 # -----------------------------------------------------------------------------
 
+sub _getEncKey
+{
+    my ($key, $keysize) = @_;
+    return substr($key,$keysize,$keysize);
+}
+
+# -----------------------------------------------------------------------------
+
+sub _getMacKey
+{
+    my ($key, $keysize) = @_;
+    return substr($key,0,$keysize);
+}
+
+# -----------------------------------------------------------------------------
+
 sub _getCipher
 {
-    my ($cipherType, $symetric_key, $padding, $iv, $keysize) = @_;
+    my ($cipherType, $key, $padding, $iv, $keysize) = @_;
     my $cipher = Crypt::CBC->new( -literal_key => 1,
-                                  -key         => $symetric_key,
+                                  -key         => $key,
                                   -keysize     => $keysize,
                                   -iv          => $iv,
-                                  #-header      => 'salt', # Openssl Compatible
                                   -header      => 'none',
                                   -padding     => $padding,
                                   -cipher      => $cipherType
                                 );
 }
-
 
 # -----------------------------------------------------------------------------
 
@@ -195,7 +231,9 @@ sub _alg_dir_encode
     my $keysize    = $enc_params->[1] / 8; # /8 to get it in bytes
     my $padding    = $crypt_padding_map{ $enc_params->[3] };
 
-    my $cipher     = _getCipher( $cipherType, $key, $padding, $iv, $keysize );
+    my $enckey = _getEncKey($key, $keysize);
+
+    my $cipher     = _getCipher( $cipherType, $enckey, $padding, $iv, $keysize );
     my $ciphertext = $cipher->encrypt( $plaintext );
     my $encrypted_key = '';
 
@@ -214,7 +252,9 @@ sub _alg_dir_decode
     my $keysize    = $enc_params->[1] / 8; # /8 to get it in bytes
     my $padding    = $crypt_padding_map{ $enc_params->[3] };
 
-    my $cipher = _getCipher( $cipherType, $key, $padding, $iv, $keysize );
+    my $enckey = _getEncKey($key, $keysize);
+
+    my $cipher = _getCipher( $cipherType, $enckey, $padding, $iv, $keysize );
     return $cipher->decrypt( $ciphertext );
 }
 

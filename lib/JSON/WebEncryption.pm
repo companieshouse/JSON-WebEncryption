@@ -4,7 +4,7 @@ use strict;
 
 use parent 'Exporter';
 
-our $VERSION = '0.06';
+our $VERSION = '0.05';
 
 use Carp qw(croak);
 use Crypt::CBC;
@@ -79,7 +79,7 @@ sub encode
     croak "Unsupported alg value $alg. Possible values are ".join( ', ', (keys %allowed_alg) ) unless $alg_params;
     croak "Unsupported enc value $enc. Possible values are ".join( ', ', (keys %allowed_enc) ) unless $enc_params;
 
-    my $keysize      = $enc_params->[1];
+    my $keysize      = $enc_params->[1] / 8;
     my $ivsize       = $enc_params->[2] / 8; # /8 to get it in bytes
     my $integrity_fn = $enc_params->[4];
 
@@ -133,8 +133,6 @@ sub decode
     my $b64Header = $segment[0];
     my $header = decode_json( decode_base64url( $b64Header ) );
 
-    croak "Cannot decode a non JWE message."  if $header->{typ} ne 'JWE';
-
     my $alg_params = $allowed_alg{$header->{alg}};
     my $enc_params = $allowed_enc{$header->{enc}};
 
@@ -167,16 +165,16 @@ sub _getAuthTag
 {
     my ($header, $iv, $ciphertext, $key, $enc_params) = @_;
 
-    my $keysize      = $enc_params->[1];
+    my $keysize      = $enc_params->[1] / 8;
     my $integrity_fn = $enc_params->[4];
 
     my $hmackey = _getMacKey($key,$keysize);
 
     my $headlength = 8 * length $header;
-    my $al = pack("NN",0,$headlength);  # Big endian 64bit length
-    my $hmacinput = $header . $iv . $ciphertext . $al;
-    my $hmac = &$integrity_fn($hmacinput, $hmackey);
-    my $authtag = substr($hmac,0,$keysize);
+    my $al         = pack("NN",0,$headlength);  # Big endian 64bit length
+    my $hmacinput  = $header . $iv . $ciphertext . $al;
+    my $hmac       = &$integrity_fn($hmacinput, $hmackey);
+    my $authtag    = substr($hmac,0,$keysize);
     return encode_base64url( $authtag );
 }
 
